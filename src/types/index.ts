@@ -1,7 +1,7 @@
 export type EventType = 'todo' | 'calendar' ;
 export type PriorityLevel = 'low' | 'mid' | 'high' ;
 export type EventStatus = 'not-started' | 'going-on' | 'completed' ;
-export type MediaType = 'email' | 'phone' | 'in-person' ;
+export type MediaType = 'email' | 'phone' | 'in-person' | 'text' | 'checklist' | 'image';
 
 export interface Section {
     id:string;
