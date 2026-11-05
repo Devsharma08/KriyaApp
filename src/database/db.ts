@@ -2,6 +2,7 @@ type SQLiteDB = {
     execAsync: (sql: string) => Promise<void>;
     getAllAsync: <T>(sql: string, params?: any[]) => Promise<T[]>;
     runAsync: (sql: string, params?: any[]) => Promise<any>;
+    withTransactionAsync: (work: (tx: any) => Promise<void>) => Promise<void>;
 };
 
 let db : Promise<SQLiteDB> | null = null;
@@ -55,7 +56,6 @@ export const initDatabase = async() =>{
         section_id text,
         title text not null,
         label text not null default 'General',
-        content text,
         line_count integer not null default 0,
         created_at text not null,
         updated_at text not null,
