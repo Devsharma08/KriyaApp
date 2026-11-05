@@ -83,8 +83,10 @@ export const NotesScreen: React.FC<Props> = ({ selectedSectionId, sections }) =>
 
       {selectedNote && (
         <NoteDetailScreen
+          visible={true}
           note={selectedNote}
           onClose={() => setSelectedNote(null)}
+          onNoteUpdated={loadNotes}
         />
       )}
     </View>
