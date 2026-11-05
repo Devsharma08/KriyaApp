@@ -1,6 +1,7 @@
 type SQLiteDB = {
     execAsync: (sql: string) => Promise<void>;
     getAllAsync: <T>(sql: string, params?: any[]) => Promise<T[]>;
+    runAsync: (sql: string, params?: any[]) => Promise<any>;
 };
 
 let db : Promise<SQLiteDB> | null = null;
@@ -33,10 +34,6 @@ export const initDatabase = async() =>{
             iconName text,
             sortOrder integer not null
         );
-
-        drop table if exists note_contents;
-        drop table if exists events;
-        drop table if exists notes;
 
         create table if not exists events(
         id text primary key not null,

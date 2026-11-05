@@ -1,5 +1,5 @@
-export type EventType = 'todo' | 'calander' ;
-export type PriorityLevel = 'low' | 'medium' | 'high' ;
+export type EventType = 'todo' | 'calendar' ;
+export type PriorityLevel = 'low' | 'mid' | 'high' ;
 export type EventStatus = 'not-started' | 'going-on' | 'completed' ;
 export type MediaType = 'email' | 'phone' | 'in-person' ;
 
