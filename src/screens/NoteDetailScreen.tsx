@@ -8,21 +8,22 @@ import {
   View,
   ScrollView,
   Alert,
+  KeyboardAvoidingView,
+  Platform,
+  Keyboard,
+  useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router, useLocalSearchParams } from 'expo-router';
-import { Note, NoteContentBlock, MediaType } from '../types';
+import { Note, NoteContentBlock } from '../types';
 import {
-  fetchNoteBlocks,
   fetchNoteById,
-  addNoteBlock,
-  updateNoteBlock,
-  deleteNoteBlock,
+  fetchNoteBlocks,
   updateNoteMetadata,
+  updateNoteBlock,
+  addNoteBlock,
 } from '../database/queries';
 import { SPACING, COLORS, RADIUS } from '../theme/spacing';
-
-const Divider = () => <View style={styles.divider} />;
 
 interface NoteDetailPageProps {
   noteId: string;
@@ -30,18 +31,20 @@ interface NoteDetailPageProps {
 
 export const NoteDetailScreen: React.FC<NoteDetailPageProps> = ({ noteId }) => {
   const insets = useSafeAreaInsets();
+  const { height: screenHeight } = useWindowDimensions();
   const [note, setNote] = useState<Note | null>(null);
   const [title, setTitle] = useState('');
+  const [content, setContent] = useState('');
   const [label, setLabel] = useState('');
-  const [blocks, setBlocks] = useState<NoteContentBlock[]>([]);
-  const [newBlockText, setNewBlockText] = useState('');
-  const [newBlockType, setNewBlockType] = useState<MediaType>('text');
+  const [blockId, setBlockId] = useState<string | null>(null);
+  const [infoVisible, setInfoVisible] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
 
   useEffect(() => {
     const loadNote = async () => {
       try {
-        const [noteData, noteBlocks] = await Promise.all([
+        const [noteData, blocks] = await Promise.all([
           fetchNoteById(noteId),
           fetchNoteBlocks(noteId),
         ]);
@@ -50,247 +53,198 @@ export const NoteDetailScreen: React.FC<NoteDetailPageProps> = ({ noteId }) => {
           setTitle(noteData.title);
           setLabel(noteData.label);
         }
-        setBlocks(noteBlocks);
+        if (blocks.length > 0) {
+          setContent(blocks[0].content);
+          setBlockId(blocks[0].id);
+        } else {
+          setContent('');
+          setBlockId(null);
+        }
       } catch (error) {
         console.error('Failed to load note:', error);
-        Alert.alert('Error', 'Failed to load note details.');
+        Alert.alert('Error', 'Failed to load note.');
       }
     };
 
     loadNote();
   }, [noteId]);
 
-  const calculateLineCount = useCallback(
-    (currentBlocks: NoteContentBlock[]) =>
-      currentBlocks.reduce(
-        (acc, b) => acc + (b.content ? b.content.split('\n').length : 0),
-        0
-      ),
-    []
-  );
+  useEffect(() => {
+    const showSub = Keyboard.addListener('keyboardDidShow', (e) => {
+      setKeyboardHeight(e.endCoordinates.height);
+    });
+    const hideSub = Keyboard.addListener('keyboardDidHide', () => {
+      setKeyboardHeight(0);
+    });
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, []);
 
-  const handleSaveHeader = useCallback(async () => {
+  const handleSave = useCallback(async () => {
     if (!note) return;
-    const totalLines = calculateLineCount(blocks);
     setIsSaving(true);
     try {
       await updateNoteMetadata(
         note.id,
         title.trim() || 'Untitled Note',
         label.trim() || 'General',
-        totalLines
+        content,
+        content ? content.split('\n').length : 0,
       );
+      if (blockId) {
+        await updateNoteBlock(blockId, content, note.id);
+      } else if (content.trim()) {
+        await addNoteBlock(note.id, 'text', content.trim(), 0);
+      }
       router.back();
     } catch (error) {
-      console.error('Failed to save note metadata:', error);
+      console.error('Failed to save note:', error);
       Alert.alert('Error', 'Failed to save note.');
     } finally {
       setIsSaving(false);
     }
-  }, [note, title, label, blocks, calculateLineCount]);
+  }, [note, title, label, content, blockId]);
 
-  const handleAddBlock = useCallback(async () => {
-    if (!note) return;
-    if (!newBlockText.trim()) return;
-    const nextOrder = blocks.length;
-    await addNoteBlock(note.id, newBlockType, newBlockText.trim(), nextOrder);
-    setNewBlockText('');
-    setBlocks((prev) => [...prev]);
-  }, [note, newBlockText, newBlockType, blocks.length]);
-
-  const handleUpdateBlockContent = useCallback(
-    (blockId: string, text: string) => {
-      setBlocks((prev) =>
-        prev.map((b) => (b.id === blockId ? { ...b, content: text } : b))
-      );
-    },
-    []
-  );
-
-  const handleDeleteBlock = async (blockId: string) => {
-    if (!note) return;
-    Alert.alert('Delete Block', 'Are you sure?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          await deleteNoteBlock(note.id, blockId);
-          setBlocks((prev) => prev.filter((b) => b.id !== blockId));
-        },
-      },
+  const handleUploadMedia = () => {
+    Alert.alert('Upload Media', 'File/media upload coming soon.', [
+      { text: 'OK', style: 'cancel' },
     ]);
   };
 
-  const handleDeleteNote = async () => {
-    if (!note) return;
-    Alert.alert('Delete Note', 'Are you sure you want to delete this note? This cannot be undone.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          await deleteNoteBlock(note.id);
-          router.back();
-        },
-      },
-    ]);
+  const renderInfoModal = () => {
+    if (!note) return null;
+    return (
+      <Modal
+        visible={infoVisible}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setInfoVisible(false)}
+      >
+        <TouchableOpacity
+          style={styles.backdrop}
+          activeOpacity={1}
+          onPress={() => setInfoVisible(false)}
+        >
+          <View style={[styles.infoCard, { marginBottom: insets.bottom + SPACING.md }]}>
+            <TouchableOpacity
+              style={styles.infoCloseBtn}
+              onPress={() => setInfoVisible(false)}
+            >
+              <Text style={styles.infoCloseText}>×</Text>
+            </TouchableOpacity>
+            <Text style={styles.infoTitle}>Note Information</Text>
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>Title</Text>
+              <Text style={styles.infoValue}>{note.title}</Text>
+            </View>
+            <View style={styles.infoDivider} />
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>Section</Text>
+              <Text style={styles.infoValue}>{note.sectionId || '—'}</Text>
+            </View>
+            <View style={styles.infoDivider} />
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>Label</Text>
+              <Text style={styles.infoValue}>{note.label || 'General'}</Text>
+            </View>
+            <View style={styles.infoDivider} />
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>Created</Text>
+              <Text style={styles.infoValue}>{new Date(note.createdAt).toLocaleDateString()}</Text>
+            </View>
+            <View style={styles.infoDivider} />
+            <View style={styles.infoRow}>
+              <Text style={styles.infoLabel}>Updated</Text>
+              <Text style={styles.infoValue}>{new Date(note.updatedAt).toLocaleDateString()}</Text>
+            </View>
+          </View>
+        </TouchableOpacity>
+      </Modal>
+    );
   };
 
-  if (!note) {
-    return null;
-  }
+  if (!note) return null;
 
-  const blockTypes: MediaType[] = ['text', 'checklist'];
+  const effectiveHeight = screenHeight - keyboardHeight;
 
   return (
-    <View style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity
-          style={styles.backButton}
-          onPress={() => router.back()}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        >
-          <Text style={styles.backText}>←</Text>
-        </TouchableOpacity>
-        <View style={styles.titleWrapper}>
-          <Text style={styles.headerTitle}>{note.title || 'Untitled Note'}</Text>
-          <Text style={styles.headerSubtitle}>{blocks.length} block{blocks.length !== 1 ? 's' : ''}</Text>
-        </View>
-        <TouchableOpacity style={styles.deleteButton} onPress={handleDeleteNote}>
-          <Text style={styles.deleteText}>Delete</Text>
-        </TouchableOpacity>
-      </View>
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      style={{ flex: 1 }}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 70 : 0}
+    >
+      <View style={styles.container}>
+        {renderInfoModal()}
 
-      {/* Metadata Card */}
-      <View style={styles.metadataCard}>
-        <View style={styles.metadataRow}>
-          <Text style={styles.metadataLabel}>SECTION</Text>
-          <Text style={styles.metadataValue}>{note.sectionId || '—'}</Text>
+        {/* Header Section */}
+        <View style={styles.header}>
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => router.back()}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <Text style={styles.backText}>←</Text>
+          </TouchableOpacity>
+          <TextInput
+            style={styles.titleInput}
+            value={title}
+            onChangeText={setTitle}
+            placeholder="Untitled Note"
+          />
+          <TouchableOpacity
+            style={styles.infoButton}
+            onPress={() => setInfoVisible(true)}
+          >
+            <Text style={styles.infoText}>i</Text>
+          </TouchableOpacity>
         </View>
-        <View style={styles.metadataDivider} />
-        <View style={styles.metadataRow}>
-          <Text style={styles.metadataLabel}>LABEL</Text>
-          <Text style={styles.metadataValue}>{note.label || 'General'}</Text>
-        </View>
-        <View style={styles.metadataDivider} />
-        <View style={styles.metadataRow}>
-          <Text style={styles.metadataLabel}>CREATED</Text>
-          <Text style={styles.metadataValue}>{new Date(note.createdAt).toLocaleDateString()}</Text>
-        </View>
-        <View style={styles.metadataDivider} />
-        <View style={styles.metadataRow}>
-          <Text style={styles.metadataLabel}>UPDATED</Text>
-          <Text style={styles.metadataValue}>{new Date(note.updatedAt).toLocaleDateString()}</Text>
-        </View>
-      </View>
 
-      {/* Content Editor */}
-      <View style={styles.contentContainer}>
-        <ScrollView
-          style={styles.scrollView}
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
-          keyboardShouldPersistTaps="handled"
-        >
-          <View style={styles.metaCard}>
-            <Text style={styles.fieldLabel}>Title</Text>
-            <TextInput
-              style={styles.titleInput}
-              value={title}
-              onChangeText={setTitle}
-              placeholder="Note Title"
-            />
-            <Text style={styles.fieldLabel}>Topic Label</Text>
-            <TextInput
-              style={styles.labelInput}
-              value={label}
-              onChangeText={setLabel}
-              placeholder="e.g. Distributed Systems"
-            />
-          </View>
-          <Divider />
-          <Text style={styles.sectionHeading}>Content Blocks</Text>
-          {blocks.length === 0 ? (
-            <Text style={styles.emptyBlocks}>No content blocks added yet.</Text>
-          ) : (
-            blocks.map((block, idx) => (
-              <View key={block.id} style={styles.blockCard}>
-                <View style={styles.blockHeader}>
-                  <Text style={styles.blockTypeLabel}>
-                    Block #{idx + 1} • {block.type.toUpperCase()}
-                  </Text>
-                  <TouchableOpacity
-                    style={styles.deleteBlockBtn}
-                    onPress={() => handleDeleteBlock(block.id)}
-                  >
-                    <Text style={styles.deleteBlockText}>Delete</Text>
-                  </TouchableOpacity>
-                </View>
-                <TextInput
-                  style={styles.blockInput}
-                  multiline
-                  value={block.content}
-                  onChangeText={(txt) => handleUpdateBlockContent(block.id, txt)}
-                />
-              </View>
-            ))
-          )}
-          <Divider />
-          <View style={styles.addBlockCard}>
-            <Text style={styles.addBlockHeading}>Add Content Block</Text>
-            <View style={styles.typeRow}>
-              {blockTypes.map((t) => (
-                <TouchableOpacity
-                  key={t}
-                  style={[styles.typeBtn, newBlockType === t && styles.activeTypeBtn]}
-                  onPress={() => setNewBlockType(t)}
-                >
-                  <Text
-                    style={[
-                      styles.typeBtnText,
-                      newBlockType === t && styles.activeTypeBtnText,
-                    ]}
-                  >
-                    {t === 'text' ? 'Text' : t === 'checklist' ? 'Checklist' : t}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+        {/* Main Content Area */}
+        <View style={styles.contentArea}>
+          <ScrollView
+            style={styles.scrollView}
+            contentContainerStyle={[
+              styles.scrollContent,
+              { minHeight: effectiveHeight, paddingBottom: keyboardHeight },
+            ]}
+            showsVerticalScrollIndicator={false}
+            keyboardShouldPersistTaps="handled"
+          >
+            <View style={styles.contentCard}>
+              <TextInput
+                style={styles.contentInput}
+                value={content}
+                onChangeText={setContent}
+                multiline
+                placeholder="Start writing your note..."
+                placeholderTextColor="#9CA3AF"
+              />
             </View>
-            <TextInput
-              style={[styles.blockInput, styles.addBlockInput]}
-              multiline
-              placeholder={
-                newBlockType === 'text'
-                  ? 'Enter paragraph text...'
-                  : 'Enter checklist item...'
-              }
-              value={newBlockText}
-              onChangeText={setNewBlockText}
-            />
-            <TouchableOpacity style={styles.addBtn} onPress={handleAddBlock}>
-              <Text style={styles.addBtnText}>+ Add Block</Text>
-            </TouchableOpacity>
-          </View>
-          {isSaving && (
-            <View style={styles.savingIndicator}>
-              <Text style={styles.savingText}>Saving...</Text>
-            </View>
-          )}
-        </ScrollView>
-      </View>
+          </ScrollView>
+        </View>
 
-      <TouchableOpacity
-        style={styles.saveFooter}
-        onPress={handleSaveHeader}
-        disabled={isSaving}
-      >
-        <Text style={[styles.saveText, isSaving && styles.saveTextDisabled]}>
-          {isSaving ? 'Saving...' : 'Save Changes'}
-        </Text>
-      </TouchableOpacity>
-    </View>
+        {/* Footer / Action Section */}
+        <View style={styles.footer}>
+          <TouchableOpacity
+            style={[styles.saveButton, isSaving && styles.saveButtonDisabled]}
+            onPress={handleSave}
+            disabled={isSaving}
+          >
+            <Text style={[styles.saveText, isSaving && styles.saveTextDisabled]}>
+              {isSaving ? 'Saving...' : 'Save'}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={styles.uploadButton}
+            onPress={handleUploadMedia}
+          >
+            <Text style={styles.uploadText}>+</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </KeyboardAvoidingView>
   );
 };
 
@@ -299,77 +253,86 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#F5F7FA',
   },
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.4)',
+    justifyContent: 'flex-end',
+  },
+  infoCard: {
+    backgroundColor: '#FFFFFF',
+    width: '85%',
+    maxWidth: 340,
+    borderRadius: RADIUS.lg,
+    padding: SPACING.md,
+  },
+  infoCloseBtn: {
+    position: 'absolute',
+    top: SPACING.sm,
+    right: SPACING.sm,
+  },
+  infoCloseText: {
+    fontSize: 18,
+    color: COLORS.textSecondary,
+  },
+  infoTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: COLORS.textPrimary,
+    marginBottom: SPACING.md,
+  },
+  infoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: SPACING.sm,
+  },
+  infoDivider: {
+    height: 1,
+    backgroundColor: COLORS.border,
+    marginVertical: SPACING.xs,
+  },
+  infoLabel: {
+    fontSize: 14,
+    color: COLORS.textSecondary,
+  },
+  infoValue: {
+    fontSize: 14,
+    color: COLORS.textPrimary,
+    fontWeight: '500',
+  },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingTop: 8,
+    paddingHorizontal: SPACING.md,
+    paddingTop: 15,
     paddingBottom: 12,
     backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
-    borderBottomColor: '#E2E8F0',
+    borderBottomColor: COLORS.border,
   },
   backButton: {
     padding: 8,
   },
   backText: {
     fontSize: 22,
-    color: '#64748B',
+    color: COLORS.textSecondary,
   },
-  titleWrapper: {
+  titleInput: {
     flex: 1,
-    marginHorizontal: 8,
-  },
-  headerTitle: {
     fontSize: 20,
     fontWeight: '700',
-    color: '#1E293B',
-    marginBottom: 2,
+    color: COLORS.textPrimary,
+    marginHorizontal: 8,
   },
-  headerSubtitle: {
-    fontSize: 13,
-    color: '#94A3B8',
-  },
-  deleteButton: {
+  infoButton: {
     paddingHorizontal: 12,
     paddingVertical: 8,
   },
-  deleteText: {
-    fontSize: 15,
-    color: '#EF4444',
+  infoText: {
+    fontSize: 18,
+    color: COLORS.primary,
     fontWeight: '600',
   },
-  metadataCard: {
-    backgroundColor: '#FFFFFF',
-    margin: 16,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    overflow: 'hidden',
-  },
-  metadataRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-  },
-  metadataDivider: {
-    height: 1,
-    backgroundColor: '#F1F5F9',
-  },
-  metadataLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#64748B',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  metadataValue: {
-    fontSize: 15,
-    color: '#1E293B',
-    fontWeight: '500',
-  },
-  contentContainer: {
+  contentArea: {
     flex: 1,
     backgroundColor: '#F5F7FA',
   },
@@ -377,165 +340,60 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContent: {
-    paddingHorizontal: 16,
-    paddingVertical: 16,
-    gap: 12,
+    paddingHorizontal: SPACING.md,
+    paddingVertical: SPACING.md,
+    flexGrow: 1,
   },
-  metaCard: {
+  contentCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 12,
+    borderRadius: RADIUS.lg,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
-    padding: 16,
+    borderColor: COLORS.border,
+    padding: SPACING.md,
   },
-  fieldLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#64748B',
-    marginBottom: 2,
+  contentInput: {
+    fontSize: 16,
+    color: COLORS.textPrimary,
+    lineHeight: 24,
+    textAlignVertical: 'top',
   },
-  titleInput: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#1E293B',
-    marginBottom: SPACING.sm,
-  },
-  labelInput: {
-    fontSize: 14,
-    color: COLORS.primary,
-    fontWeight: '500',
-  },
-  divider: {
-    height: 1,
-    backgroundColor: '#F1F5F9',
-    marginVertical: SPACING.md,
-    width: '100%',
-  },
-  sectionHeading: {
-    fontSize: 15,
-    fontWeight: 'bold',
-    color: '#1E293B',
-    marginBottom: SPACING.sm,
-  },
-  emptyBlocks: {
-    color: '#94A3B8',
-    fontStyle: 'italic',
-    marginVertical: SPACING.xs,
-  },
-  blockCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    marginBottom: SPACING.sm,
-    overflow: 'hidden',
-  },
-  blockHeader: {
+  footer: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingHorizontal: SPACING.sm,
-    paddingVertical: SPACING.xs,
-    backgroundColor: '#F1F5F9',
-  },
-  blockTypeLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#64748B',
-  },
-  deleteBlockBtn: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-  },
-  deleteBlockText: {
-    fontSize: 12,
-    color: '#EF4444',
-    fontWeight: '600',
-  },
-  blockInput: {
-    fontSize: 15,
-    color: '#1E293B',
-    lineHeight: 22,
-    padding: SPACING.sm,
-    textAlignVertical: 'top',
-  },
-  addBlockCard: {
-    backgroundColor: '#F1F5F9',
-    padding: SPACING.md,
-    borderRadius: 12,
-  },
-  addBlockHeading: {
-    fontSize: 15,
-    fontWeight: 'bold',
-    color: '#1E293B',
-    marginBottom: SPACING.sm,
-  },
-  typeRow: {
-    flexDirection: 'row',
-    gap: SPACING.sm,
-    marginBottom: SPACING.sm,
-  },
-  typeBtn: {
-    paddingHorizontal: SPACING.sm,
-    paddingVertical: SPACING.xs,
-    borderRadius: RADIUS.md,
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  activeTypeBtn: {
-    backgroundColor: COLORS.primary,
-    borderColor: COLORS.primary,
-  },
-  typeBtnText: {
-    fontSize: 13,
-    color: '#64748B',
-    fontWeight: '500',
-  },
-  activeTypeBtnText: {
-    color: '#FFFFFF',
-    fontWeight: '600',
-  },
-  addBlockInput: {
-    fontSize: 15,
-    color: '#1E293B',
-    lineHeight: 22,
-    padding: SPACING.sm,
-    textAlignVertical: 'top',
-    marginBottom: SPACING.sm,
-  },
-  addBtn: {
-    backgroundColor: COLORS.primary,
     paddingHorizontal: SPACING.md,
-    paddingVertical: SPACING.xs,
-    borderRadius: RADIUS.md,
-    alignItems: 'center',
+    paddingVertical: SPACING.md,
+    backgroundColor: '#FFFFFF',
+    borderTopWidth: 1,
+    borderTopColor: COLORS.border,
   },
-  addBtnText: {
-    color: '#FFFFFF',
-    fontWeight: '600',
-    fontSize: 15,
-  },
-  savingIndicator: {
-    alignItems: 'center',
-    paddingVertical: SPACING.sm,
-  },
-  savingText: {
-    fontSize: 14,
-    color: '#64748B',
-    fontWeight: '500',
-  },
-  saveFooter: {
+  saveButton: {
     backgroundColor: COLORS.primary,
     paddingVertical: SPACING.md,
+    paddingHorizontal: SPACING.md,
+    borderRadius: RADIUS.md,
     alignItems: 'center',
   },
+  saveButtonDisabled: {
+    opacity: 0.7,
+  },
   saveText: {
-    fontSize: 16,
-    fontWeight: 'bold',
     color: '#FFFFFF',
+    fontWeight: '700',
+    fontSize: 16,
   },
   saveTextDisabled: {
-    opacity: 0.7,
+    color: '#FFFFFF',
+  },
+  uploadButton: {
+    padding: SPACING.sm,
+    backgroundColor: COLORS.surfaceVariant,
+    borderRadius: RADIUS.md,
+    alignItems: 'center',
+  },
+  uploadText: {
+    fontSize: 20,
+    color: COLORS.primary,
+    fontWeight: '600',
   },
 });
