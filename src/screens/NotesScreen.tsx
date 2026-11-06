@@ -4,7 +4,7 @@ import { View, Text, FlatList, StyleSheet, TouchableOpacity } from 'react-native
 import { Note, Section } from '../types';
 import { fetchNotesBySection, createNote } from '../database/queries';
 import { CreateNoteModal } from '../components/CreateNoteModal';
-import { NoteDetailScreen } from './NoteDetailScreen';
+import { router } from 'expo-router';
 import { SPACING, COLORS, RADIUS } from '../theme/spacing';
 
 interface Props {
@@ -15,7 +15,6 @@ interface Props {
 export const NotesScreen: React.FC<Props> = ({ selectedSectionId, sections }) => {
   const [notes, setNotes] = useState<Note[]>([]);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
-  const [selectedNote, setSelectedNote] = useState<Note | null>(null);
 
   useEffect(() => {
     loadNotes();
@@ -36,6 +35,10 @@ export const NotesScreen: React.FC<Props> = ({ selectedSectionId, sections }) =>
     loadNotes();
   };
 
+  const handleOpenNote = (noteId: string) => {
+    router.push(`/notes/${noteId}`);
+  };
+
   return (
     <View style={styles.container}>
       <FlatList
@@ -48,7 +51,7 @@ export const NotesScreen: React.FC<Props> = ({ selectedSectionId, sections }) =>
         renderItem={({ item }) => (
           <TouchableOpacity
             style={styles.card}
-            onPress={() => setSelectedNote(item)}
+            onPress={() => handleOpenNote(item.id)}
           >
             <View style={styles.cardHeader}>
               <Text style={styles.title}>{item.title}</Text>
@@ -69,7 +72,7 @@ export const NotesScreen: React.FC<Props> = ({ selectedSectionId, sections }) =>
         )}
       />
 
-      <TouchableOpacity style={styles.fab} onPress={() => setIsCreateModalOpen(true)}>
+      <TouchableOpacity style={styles.fab} onPress={() => router.push('/notes/new')}>
         <Text style={styles.fabIcon}>+</Text>
       </TouchableOpacity>
 
@@ -80,15 +83,6 @@ export const NotesScreen: React.FC<Props> = ({ selectedSectionId, sections }) =>
         onClose={() => setIsCreateModalOpen(false)}
         onSubmit={handleCreateNote}
       />
-
-      {selectedNote && (
-        <NoteDetailScreen
-          visible={true}
-          note={selectedNote}
-          onClose={() => setSelectedNote(null)}
-          onNoteUpdated={loadNotes}
-        />
-      )}
     </View>
   );
 };

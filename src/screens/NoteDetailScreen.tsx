@@ -10,9 +10,11 @@ import {
   Alert,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { router, useLocalSearchParams } from 'expo-router';
 import { Note, NoteContentBlock, MediaType } from '../types';
 import {
   fetchNoteBlocks,
+  fetchNoteById,
   addNoteBlock,
   updateNoteBlock,
   deleteNoteBlock,
@@ -20,44 +22,43 @@ import {
 } from '../database/queries';
 import { SPACING, COLORS, RADIUS } from '../theme/spacing';
 
-interface Props {
-  visible: boolean;
-  note: Note | null;
-  onClose: () => void;
-  onNoteUpdated: () => void;
-}
-
 const Divider = () => <View style={styles.divider} />;
 
-export const NoteDetailScreen: React.FC<Props> = ({
-  visible,
-  note,
-  onClose,
-  onNoteUpdated,
-}) => {
-  const insets = useSafeAreaInsets();
-  if (!note) return null;
+interface NoteDetailPageProps {
+  noteId: string;
+}
 
-  const [title, setTitle] = useState(note.title);
-  const [label, setLabel] = useState(note.label);
+export const NoteDetailScreen: React.FC<NoteDetailPageProps> = ({ noteId }) => {
+  const insets = useSafeAreaInsets();
+  const [note, setNote] = useState<Note | null>(null);
+  const [title, setTitle] = useState('');
+  const [label, setLabel] = useState('');
   const [blocks, setBlocks] = useState<NoteContentBlock[]>([]);
   const [newBlockText, setNewBlockText] = useState('');
   const [newBlockType, setNewBlockType] = useState<MediaType>('text');
   const [isSaving, setIsSaving] = useState(false);
 
   useEffect(() => {
-    if (note?.id) {
-      setTitle(note.title);
-      setLabel(note.label);
-      loadBlocks();
-    }
-  }, [note?.id]);
+    const loadNote = async () => {
+      try {
+        const [noteData, noteBlocks] = await Promise.all([
+          fetchNoteById(noteId),
+          fetchNoteBlocks(noteId),
+        ]);
+        if (noteData) {
+          setNote(noteData);
+          setTitle(noteData.title);
+          setLabel(noteData.label);
+        }
+        setBlocks(noteBlocks);
+      } catch (error) {
+        console.error('Failed to load note:', error);
+        Alert.alert('Error', 'Failed to load note details.');
+      }
+    };
 
-  const loadBlocks = useCallback(async () => {
-    if (!note?.id) return;
-    const loaded = await fetchNoteBlocks(note.id);
-    setBlocks(loaded);
-  }, [note?.id]);
+    loadNote();
+  }, [noteId]);
 
   const calculateLineCount = useCallback(
     (currentBlocks: NoteContentBlock[]) =>
@@ -69,6 +70,7 @@ export const NoteDetailScreen: React.FC<Props> = ({
   );
 
   const handleSaveHeader = useCallback(async () => {
+    if (!note) return;
     const totalLines = calculateLineCount(blocks);
     setIsSaving(true);
     try {
@@ -78,24 +80,23 @@ export const NoteDetailScreen: React.FC<Props> = ({
         label.trim() || 'General',
         totalLines
       );
-      onNoteUpdated();
-      onClose();
+      router.back();
     } catch (error) {
       console.error('Failed to save note metadata:', error);
       Alert.alert('Error', 'Failed to save note.');
     } finally {
       setIsSaving(false);
     }
-  }, [note.id, title, label, blocks, calculateLineCount, onNoteUpdated, onClose]);
+  }, [note, title, label, blocks, calculateLineCount]);
 
   const handleAddBlock = useCallback(async () => {
+    if (!note) return;
     if (!newBlockText.trim()) return;
     const nextOrder = blocks.length;
     await addNoteBlock(note.id, newBlockType, newBlockText.trim(), nextOrder);
     setNewBlockText('');
-    await loadBlocks();
-    onNoteUpdated();
-  }, [note.id, newBlockText, newBlockType, blocks.length, loadBlocks, onNoteUpdated]);
+    setBlocks((prev) => [...prev]);
+  }, [note, newBlockText, newBlockType, blocks.length]);
 
   const handleUpdateBlockContent = useCallback(
     (blockId: string, text: string) => {
@@ -107,6 +108,7 @@ export const NoteDetailScreen: React.FC<Props> = ({
   );
 
   const handleDeleteBlock = async (blockId: string) => {
+    if (!note) return;
     Alert.alert('Delete Block', 'Are you sure?', [
       { text: 'Cancel', style: 'cancel' },
       {
@@ -114,244 +116,288 @@ export const NoteDetailScreen: React.FC<Props> = ({
         style: 'destructive',
         onPress: async () => {
           await deleteNoteBlock(note.id, blockId);
-          await loadBlocks();
-          onNoteUpdated();
+          setBlocks((prev) => prev.filter((b) => b.id !== blockId));
         },
       },
     ]);
   };
 
+  const handleDeleteNote = async () => {
+    if (!note) return;
+    Alert.alert('Delete Note', 'Are you sure you want to delete this note? This cannot be undone.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: async () => {
+          await deleteNoteBlock(note.id);
+          router.back();
+        },
+      },
+    ]);
+  };
+
+  if (!note) {
+    return null;
+  }
+
   const blockTypes: MediaType[] = ['text', 'checklist'];
 
   return (
-    <Modal
-      visible={visible}
-      animationType="slide"
-      transparent
-      onRequestClose={onClose}
-    >
-      {/* Backdrop tap closes modal */}
-      <TouchableOpacity
-        style={styles.backdrop}
-        activeOpacity={1}
-        onPress={onClose}
-      >
-        {/* Sheet — taps here should NOT close the modal */}
-        <View
-          style={[
-            styles.sheetCard,
-            { paddingBottom: Math.max(insets.bottom, SPACING.md) },
-          ]}
-          collapsable={false}
+    <View style={styles.container}>
+      {/* Header */}
+      <View style={styles.header}>
+        <TouchableOpacity
+          style={styles.backButton}
+          onPress={() => router.back()}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
         >
-          <View style={styles.headerSection}>
-            <View style={styles.headerLeft}>
-              <Text style={styles.headerTitle}>Note Details</Text>
-              <Text style={styles.headerSubtitle}>{title}</Text>
-            </View>
-            <TouchableOpacity
-              style={styles.menuButton}
-              onPress={() => alert('Menu options coming soon')}
-            >
-              <Text style={styles.menuButtonText}>⋮</Text>
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.mainContent}>
-            <ScrollView
-              contentContainerStyle={styles.scrollContent}
-              showsVerticalScrollIndicator={false}
-              keyboardShouldPersistTaps="handled"
-            >
-              <View style={styles.metaCard}>
-                <Text style={styles.fieldLabel}>Title</Text>
-                <TextInput
-                  style={styles.titleInput}
-                  value={title}
-                  onChangeText={setTitle}
-                  placeholder="Note Title"
-                />
-                <Text style={styles.fieldLabel}>Topic Label</Text>
-                <TextInput
-                  style={styles.labelInput}
-                  value={label}
-                  onChangeText={setLabel}
-                  placeholder="e.g. Distributed Systems"
-                />
-              </View>
-              <Divider />
-              <Text style={styles.sectionHeading}>Content Blocks</Text>
-              {blocks.length === 0 ? (
-                <Text style={styles.emptyBlocks}>
-                  No content blocks added yet.
-                </Text>
-              ) : (
-                blocks.map((block, idx) => (
-                  <View key={block.id} style={styles.blockCard}>
-                    <View style={styles.blockHeader}>
-                      <Text style={styles.blockTypeLabel}>
-                        Block #{idx + 1} • {block.type.toUpperCase()}
-                      </Text>
-                      <TouchableOpacity
-                        style={styles.deleteBlockBtn}
-                        onPress={() => handleDeleteBlock(block.id)}
-                      >
-                        <Text style={styles.deleteBlockText}>Delete</Text>
-                      </TouchableOpacity>
-                    </View>
-                    <TextInput
-                      style={styles.blockInput}
-                      multiline
-                      value={block.content}
-                      onChangeText={(txt) =>
-                        handleUpdateBlockContent(block.id, txt)
-                      }
-                    />
-                  </View>
-                ))
-              )}
-              <Divider />
-              <View style={styles.addBlockCard}>
-                <Text style={styles.addBlockHeading}>Add Content Block</Text>
-                <View style={styles.typeRow}>
-                  {blockTypes.map((t) => (
-                    <TouchableOpacity
-                      key={t}
-                      style={[
-                        styles.typeBtn,
-                        newBlockType === t && styles.activeTypeBtn,
-                      ]}
-                      onPress={() => setNewBlockType(t)}
-                    >
-                      <Text
-                        style={[
-                          styles.typeBtnText,
-                          newBlockType === t && styles.activeTypeBtnText,
-                        ]}
-                      >
-                        {t === 'text'
-                          ? 'Text'
-                          : t === 'checklist'
-                          ? 'Checklist'
-                          : t}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-                <TextInput
-                  style={[styles.blockInput, styles.addBlockInput]}
-                  multiline
-                  placeholder={
-                    newBlockType === 'text'
-                      ? 'Enter paragraph text...'
-                      : 'Enter checklist item...'
-                  }
-                  value={newBlockText}
-                  onChangeText={setNewBlockText}
-                />
-                <TouchableOpacity
-                  style={styles.addBtn}
-                  onPress={handleAddBlock}
-                >
-                  <Text style={styles.addBtnText}>+ Add Block</Text>
-                </TouchableOpacity>
-              </View>
-              {isSaving && (
-                <View style={styles.savingIndicator}>
-                  <Text style={styles.savingText}>Saving...</Text>
-                </View>
-              )}
-            </ScrollView>
-          </View>
-
-          <View style={styles.bottomNav}>
-            <TouchableOpacity
-              style={styles.navBtn}
-              onPress={onClose}
-            >
-              <Text style={styles.closeText}>Cancel</Text>
-            </TouchableOpacity>
-            <Text style={styles.bottomNavTitle}>Note Details</Text>
-            <TouchableOpacity
-              style={[styles.navBtn, styles.saveBtn]}
-              onPress={handleSaveHeader}
-            >
-              <Text style={[styles.saveText, isSaving && styles.saveTextDisabled]}>
-                {isSaving ? 'Saving...' : 'Save'}
-              </Text>
-            </TouchableOpacity>
-          </View>
-          <View style={styles.dragHandle} />
+          <Text style={styles.backText}>←</Text>
+        </TouchableOpacity>
+        <View style={styles.titleWrapper}>
+          <Text style={styles.headerTitle}>{note.title || 'Untitled Note'}</Text>
+          <Text style={styles.headerSubtitle}>{blocks.length} block{blocks.length !== 1 ? 's' : ''}</Text>
         </View>
+        <TouchableOpacity style={styles.deleteButton} onPress={handleDeleteNote}>
+          <Text style={styles.deleteText}>Delete</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Metadata Card */}
+      <View style={styles.metadataCard}>
+        <View style={styles.metadataRow}>
+          <Text style={styles.metadataLabel}>SECTION</Text>
+          <Text style={styles.metadataValue}>{note.sectionId || '—'}</Text>
+        </View>
+        <View style={styles.metadataDivider} />
+        <View style={styles.metadataRow}>
+          <Text style={styles.metadataLabel}>LABEL</Text>
+          <Text style={styles.metadataValue}>{note.label || 'General'}</Text>
+        </View>
+        <View style={styles.metadataDivider} />
+        <View style={styles.metadataRow}>
+          <Text style={styles.metadataLabel}>CREATED</Text>
+          <Text style={styles.metadataValue}>{new Date(note.createdAt).toLocaleDateString()}</Text>
+        </View>
+        <View style={styles.metadataDivider} />
+        <View style={styles.metadataRow}>
+          <Text style={styles.metadataLabel}>UPDATED</Text>
+          <Text style={styles.metadataValue}>{new Date(note.updatedAt).toLocaleDateString()}</Text>
+        </View>
+      </View>
+
+      {/* Content Editor */}
+      <View style={styles.contentContainer}>
+        <ScrollView
+          style={styles.scrollView}
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+        >
+          <View style={styles.metaCard}>
+            <Text style={styles.fieldLabel}>Title</Text>
+            <TextInput
+              style={styles.titleInput}
+              value={title}
+              onChangeText={setTitle}
+              placeholder="Note Title"
+            />
+            <Text style={styles.fieldLabel}>Topic Label</Text>
+            <TextInput
+              style={styles.labelInput}
+              value={label}
+              onChangeText={setLabel}
+              placeholder="e.g. Distributed Systems"
+            />
+          </View>
+          <Divider />
+          <Text style={styles.sectionHeading}>Content Blocks</Text>
+          {blocks.length === 0 ? (
+            <Text style={styles.emptyBlocks}>No content blocks added yet.</Text>
+          ) : (
+            blocks.map((block, idx) => (
+              <View key={block.id} style={styles.blockCard}>
+                <View style={styles.blockHeader}>
+                  <Text style={styles.blockTypeLabel}>
+                    Block #{idx + 1} • {block.type.toUpperCase()}
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.deleteBlockBtn}
+                    onPress={() => handleDeleteBlock(block.id)}
+                  >
+                    <Text style={styles.deleteBlockText}>Delete</Text>
+                  </TouchableOpacity>
+                </View>
+                <TextInput
+                  style={styles.blockInput}
+                  multiline
+                  value={block.content}
+                  onChangeText={(txt) => handleUpdateBlockContent(block.id, txt)}
+                />
+              </View>
+            ))
+          )}
+          <Divider />
+          <View style={styles.addBlockCard}>
+            <Text style={styles.addBlockHeading}>Add Content Block</Text>
+            <View style={styles.typeRow}>
+              {blockTypes.map((t) => (
+                <TouchableOpacity
+                  key={t}
+                  style={[styles.typeBtn, newBlockType === t && styles.activeTypeBtn]}
+                  onPress={() => setNewBlockType(t)}
+                >
+                  <Text
+                    style={[
+                      styles.typeBtnText,
+                      newBlockType === t && styles.activeTypeBtnText,
+                    ]}
+                  >
+                    {t === 'text' ? 'Text' : t === 'checklist' ? 'Checklist' : t}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <TextInput
+              style={[styles.blockInput, styles.addBlockInput]}
+              multiline
+              placeholder={
+                newBlockType === 'text'
+                  ? 'Enter paragraph text...'
+                  : 'Enter checklist item...'
+              }
+              value={newBlockText}
+              onChangeText={setNewBlockText}
+            />
+            <TouchableOpacity style={styles.addBtn} onPress={handleAddBlock}>
+              <Text style={styles.addBtnText}>+ Add Block</Text>
+            </TouchableOpacity>
+          </View>
+          {isSaving && (
+            <View style={styles.savingIndicator}>
+              <Text style={styles.savingText}>Saving...</Text>
+            </View>
+          )}
+        </ScrollView>
+      </View>
+
+      <TouchableOpacity
+        style={styles.saveFooter}
+        onPress={handleSaveHeader}
+        disabled={isSaving}
+      >
+        <Text style={[styles.saveText, isSaving && styles.saveTextDisabled]}>
+          {isSaving ? 'Saving...' : 'Save Changes'}
+        </Text>
       </TouchableOpacity>
-    </Modal>
+    </View>
   );
 };
 
 const styles = StyleSheet.create({
-  backdrop: {
+  container: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.4)',
-    justifyContent: 'flex-end',
+    backgroundColor: '#F5F7FA',
   },
-  sheetCard: {
-    backgroundColor: COLORS.surface,
-    borderTopLeftRadius: RADIUS.lg,
-    borderTopRightRadius: RADIUS.lg,
-    maxHeight: '90%',
-  },
-  headerSection: {
+  header: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    padding: SPACING.md,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    paddingBottom: 12,
+    backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
-    marginBottom: SPACING.md,
+    borderBottomColor: '#E2E8F0',
   },
-  headerLeft: {
+  backButton: {
+    padding: 8,
+  },
+  backText: {
+    fontSize: 22,
+    color: '#64748B',
+  },
+  titleWrapper: {
     flex: 1,
+    marginHorizontal: 8,
   },
   headerTitle: {
     fontSize: 20,
-    fontWeight: 'bold',
-    color: COLORS.textPrimary,
-    marginBottom: SPACING.xs,
+    fontWeight: '700',
+    color: '#1E293B',
+    marginBottom: 2,
   },
   headerSubtitle: {
-    fontSize: 16,
-    color: COLORS.textSecondary,
+    fontSize: 13,
+    color: '#94A3B8',
   },
-  menuButton: {
-    padding: SPACING.sm,
-    backgroundColor: COLORS.border,
-    borderRadius: RADIUS.md,
+  deleteButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
   },
-  menuButtonText: {
-    fontSize: 18,
-    color: COLORS.textSecondary,
+  deleteText: {
+    fontSize: 15,
+    color: '#EF4444',
+    fontWeight: '600',
   },
-  mainContent: {
+  metadataCard: {
+    backgroundColor: '#FFFFFF',
+    margin: 16,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    overflow: 'hidden',
+  },
+  metadataRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+  },
+  metadataDivider: {
+    height: 1,
+    backgroundColor: '#F1F5F9',
+  },
+  metadataLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#64748B',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  metadataValue: {
+    fontSize: 15,
+    color: '#1E293B',
+    fontWeight: '500',
+  },
+  contentContainer: {
+    flex: 1,
+    backgroundColor: '#F5F7FA',
+  },
+  scrollView: {
     flex: 1,
   },
   scrollContent: {
-    padding: SPACING.md,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    gap: 12,
   },
   metaCard: {
-    backgroundColor: COLORS.surfaceVariant,
-    padding: SPACING.md,
-    borderRadius: RADIUS.md,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    padding: 16,
   },
   fieldLabel: {
     fontSize: 12,
     fontWeight: '600',
-    color: COLORS.textSecondary,
+    color: '#64748B',
     marginBottom: 2,
   },
   titleInput: {
     fontSize: 18,
     fontWeight: 'bold',
-    color: COLORS.textPrimary,
+    color: '#1E293B',
     marginBottom: SPACING.sm,
   },
   labelInput: {
@@ -361,26 +407,26 @@ const styles = StyleSheet.create({
   },
   divider: {
     height: 1,
-    backgroundColor: COLORS.border,
+    backgroundColor: '#F1F5F9',
     marginVertical: SPACING.md,
     width: '100%',
   },
   sectionHeading: {
     fontSize: 15,
     fontWeight: 'bold',
-    color: COLORS.textPrimary,
+    color: '#1E293B',
     marginBottom: SPACING.sm,
   },
   emptyBlocks: {
-    color: COLORS.textSecondary,
+    color: '#94A3B8',
     fontStyle: 'italic',
     marginVertical: SPACING.xs,
   },
   blockCard: {
-    backgroundColor: COLORS.surface,
-    borderRadius: RADIUS.md,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: '#E2E8F0',
     marginBottom: SPACING.sm,
     overflow: 'hidden',
   },
@@ -390,12 +436,12 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: SPACING.sm,
     paddingVertical: SPACING.xs,
-    backgroundColor: COLORS.surfaceVariant,
+    backgroundColor: '#F1F5F9',
   },
   blockTypeLabel: {
     fontSize: 12,
     fontWeight: '600',
-    color: COLORS.textSecondary,
+    color: '#64748B',
   },
   deleteBlockBtn: {
     paddingHorizontal: 8,
@@ -403,25 +449,25 @@ const styles = StyleSheet.create({
   },
   deleteBlockText: {
     fontSize: 12,
-    color: COLORS.danger,
+    color: '#EF4444',
     fontWeight: '600',
   },
   blockInput: {
     fontSize: 15,
-    color: COLORS.textPrimary,
+    color: '#1E293B',
     lineHeight: 22,
     padding: SPACING.sm,
     textAlignVertical: 'top',
   },
   addBlockCard: {
-    backgroundColor: COLORS.surfaceVariant,
+    backgroundColor: '#F1F5F9',
     padding: SPACING.md,
-    borderRadius: RADIUS.md,
+    borderRadius: 12,
   },
   addBlockHeading: {
     fontSize: 15,
     fontWeight: 'bold',
-    color: COLORS.textPrimary,
+    color: '#1E293B',
     marginBottom: SPACING.sm,
   },
   typeRow: {
@@ -433,9 +479,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: SPACING.sm,
     paddingVertical: SPACING.xs,
     borderRadius: RADIUS.md,
-    backgroundColor: COLORS.surface,
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: COLORS.border,
+    borderColor: '#E2E8F0',
   },
   activeTypeBtn: {
     backgroundColor: COLORS.primary,
@@ -443,16 +489,16 @@ const styles = StyleSheet.create({
   },
   typeBtnText: {
     fontSize: 13,
-    color: COLORS.textSecondary,
+    color: '#64748B',
     fontWeight: '500',
   },
   activeTypeBtnText: {
-    color: COLORS.surface,
+    color: '#FFFFFF',
     fontWeight: '600',
   },
   addBlockInput: {
     fontSize: 15,
-    color: COLORS.textPrimary,
+    color: '#1E293B',
     lineHeight: 22,
     padding: SPACING.sm,
     textAlignVertical: 'top',
@@ -466,7 +512,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   addBtnText: {
-    color: COLORS.surface,
+    color: '#FFFFFF',
     fontWeight: '600',
     fontSize: 15,
   },
@@ -476,51 +522,20 @@ const styles = StyleSheet.create({
   },
   savingText: {
     fontSize: 14,
-    color: COLORS.textSecondary,
+    color: '#64748B',
     fontWeight: '500',
   },
-  bottomNav: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: SPACING.md,
-    paddingVertical: SPACING.sm,
-    borderTopWidth: 1,
-    borderTopColor: COLORS.border,
-    backgroundColor: COLORS.surface,
-  },
-  navBtn: {
-    padding: SPACING.xs,
-  },
-  saveBtn: {
-    paddingHorizontal: SPACING.md,
-    paddingVertical: SPACING.xs,
+  saveFooter: {
     backgroundColor: COLORS.primary,
-    borderRadius: RADIUS.md,
-  },
-  closeText: {
-    fontSize: 15,
-    color: COLORS.textSecondary,
-  },
-  bottomNavTitle: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: COLORS.textPrimary,
+    paddingVertical: SPACING.md,
+    alignItems: 'center',
   },
   saveText: {
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: 'bold',
-    color: COLORS.surface,
+    color: '#FFFFFF',
   },
   saveTextDisabled: {
     opacity: 0.7,
-  },
-  dragHandle: {
-    width: 40,
-    height: 5,
-    backgroundColor: '#CBD5E1',
-    borderRadius: RADIUS.full,
-    alignSelf: 'center',
-    marginVertical: SPACING.xs,
   },
 });
