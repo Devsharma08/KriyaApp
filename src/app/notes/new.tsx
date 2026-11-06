@@ -1,8 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, TextInput, ScrollView, Alert } from 'react-native';
 import { router } from 'expo-router';
 import { Section } from '../../types';
-import { createNote } from '../../database/queries';
+import { createNote, fetchSections } from '../../database/queries';
 import { SPACING, COLORS, RADIUS } from '../../theme/spacing';
 
 export default function NewNotePage() {
@@ -12,6 +12,17 @@ export default function NewNotePage() {
   const [sectionId, setSectionId] = useState<string>('');
   const [sections, setSections] = useState<Section[]>([]);
   const [isSaving, setIsSaving] = useState(false);
+
+  useEffect(() => {
+    const loadSections = async () => {
+      const data = await fetchSections();
+      setSections(data);
+      if (data.length > 0 && !sectionId) {
+        setSectionId(data[0].id);
+      }
+    };
+    loadSections();
+  }, [sectionId]);
 
   const handleCreate = async () => {
     if (!title.trim()) {
